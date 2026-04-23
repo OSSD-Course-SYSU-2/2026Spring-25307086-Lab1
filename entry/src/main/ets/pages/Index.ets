@@ -1,76 +1,102 @@
-import { promptAction } from '@kit.ArkUI';
+import { promptAction, curves } from '@kit.ArkUI';
 
-// 定義店鋪數據結構
 interface Shop {
   name: string;
   type: string;
   level: string;
   score: number;
+  busyLevel: number;
+  avgCost: number;
+  history: number[];
 }
+
+const defaultShops: Shop[] = [
+  { name: '松濤園焗飯', type: '吃食堂', level: '夯', score: 5, busyLevel: 2, avgCost: 15, history: [10, 15] },
+  { name: '南門口潮汕牛肉', type: '出去吃', level: '夯', score: 5, busyLevel: 3, avgCost: 95, history: [30, 45] },
+  { name: '新港西路麥當勞', type: '出去吃', level: '人上人', score: 3, busyLevel: 1, avgCost: 35, history: [5, 8] },
+  { name: '瑞幸咖啡', type: '點外賣', level: '夯', score: 5, busyLevel: 2, avgCost: 16, history: [10, 12] },
+  { name: '白象大骨麵', type: '吃泡面', level: '人上人', score: 3, busyLevel: 1, avgCost: 5, history: [3] }
+];
+
+PersistentStorage.persistProp('MyShopsData', JSON.stringify(defaultShops));
 
 @Entry
 @Component
 struct Index {
-  // --- 狀態變量 ---
   @State resultText: string = '今天吃什麼？';
-  @State resultSubText: string = '分類均等 + 智能權重 + 補償Buff';
-  @State buffText: string = '';
+  @State resultSubText: string = '時空與環境感知算法已啟動';
+  @State resultCategory: string = '';
   @State isRolling: boolean = false;
 
-  @State inputName: string = '';
-  @State inputType: string = '吃食堂';
+  // 環境與偏好狀態
+  @State currentPreference: number = 0;
+  @State isRainy: boolean = false;
+  @State isBudgetExpanded: boolean = false;
+  @State currentBudget: number = 100;
 
-  // 評價體系：從差到好排列（索引 0=拉完了, 4=夯）
-  private levels: string[] = ['拉完了', 'NPC', '人上人', '頂級', '夯'];
-  @State selectedLevelIndex: number = 4; // 默認選中「夯」
+  @State predictedWaitTime: number = 0;
+  @State showReroll: boolean = false;
+  @State lastWaitTimeRecord: number = 999;
 
-  // 四大金剛分類
-  private categories: string[] = ['吃食堂', '點外賣', '出去吃', '吃泡面'];
-
-  // 補償機制 Buff 池
-  private treatBuffs: string[] = ['必須加個蛋補償下！🥚', '來杯奶茶寬慰自己 🥤', '加份炸雞，別虧待自己 🍗', '搞個冰淇淋甜甜嘴 🍦', '多加點辣，化悲憤為食慾 🌶️'];
-  private saveBuffs: string[] = ['省點錢，今天不喝水 💧', '忍住，別加蛋了 🥚❌', '拒絕奶茶，節省預算 🚫', '原汁原味，不加額外配菜 🙅', '點份青菜，平淡才是真 🥬'];
-
-  // 初始數據
-  // 中山大學廣州校區南校園（康樂園）專屬初始數據
-  @State shops: Shop[] = [
-    // --- 食堂類 ---
-    { name: '松濤園焗飯', type: '吃食堂', level: '夯', score: 5 },
-    { name: '逸仙精緻菜', type: '吃食堂', level: '頂級', score: 4 },
-    { name: '春暉園二樓扒飯', type: '吃食堂', level: '人上人', score: 3 },
-    { name: '學一食堂大鍋菜', type: '吃食堂', level: 'NPC', score: 2 },
-
-    // --- 出去吃（南門/西門周邊） ---
-    { name: '南門口潮汕牛肉店', type: '出去吃', level: '夯', score: 5 },
-    { name: '新港西路麥當勞', type: '出去吃', level: '人上人', score: 3 },
-    { name: '下渡路卜卜貝', type: '出去吃', level: '頂級', score: 4 },
-    { name: '西門口桂林米粉', type: '出去吃', level: 'NPC', score: 2 },
-
-    // --- 點外賣（熱門商圈） ---
-    { name: '瑞幸咖啡 (新港西路店)', type: '點外賣', level: '夯', score: 5 },
-    { name: '某家燒臘拼盤', type: '點外賣', level: '頂級', score: 4 },
-    { name: '黃燜雞米飯', type: '點外賣', level: 'NPC', score: 2 },
-    { name: '深夜炸雞樂趣', type: '點外賣', level: '人上人', score: 3 },
-
-    // --- 吃泡面（救急系列） ---
-    { name: '合味道海鮮味', type: '吃泡面', level: '夯', score: 5 },
-    { name: '火雞面 (加芝士版)', type: '吃泡面', level: '頂級', score: 4 },
-    { name: '康師傅紅燒牛肉', type: '吃泡面', level: 'NPC', score: 2 },
-    { name: '白象大骨麵', type: '吃泡面', level: '人上人', score: 3 }
-  ];
-
+  @State textScale: number = 1.0;
+  @State isShowSheet: boolean = false;
   @State editingIndex: number = -1;
 
-  // --- 核心邏輯：隨機抽取 ---
+  // 批量錄入與表單狀態
+  @State batchInputText: string = '';
+  @State inputName: string = '';
+  @State inputType: string = '吃食堂';
+  @State inputBusyLevel: number = 2;
+  @State inputCost: string = '20';
+  private levels: string[] = ['拉完了', 'NPC', '人上人', '頂級', '夯'];
+  @State selectedLevelIndex: number = 4;
+
+  @StorageLink('MyShopsData') shopsJson: string = '';
+  @State shops: Shop[] = [];
+
+  aboutToAppear() {
+    try { this.shops = JSON.parse(this.shopsJson); }
+    catch (e) { this.shops = defaultShops; }
+  }
+
+  syncDataToStorage() {
+    this.shopsJson = JSON.stringify(this.shops);
+  }
+
+  predictWaitTime(shop: Shop): number {
+    if (shop.type === '吃泡面') return Math.floor(Math.random() * 3) + 3;
+
+    if (shop.type === '點外賣') {
+      let baseTime = Math.floor(Math.random() * 25) + 25;
+      return this.isRainy ? baseTime + 20 : baseTime;
+    }
+
+    const history = shop.history || [10, 15];
+    const avg = history.reduce((a, b) => a + b, 0) / history.length;
+    const now = new Date();
+    const hour = now.getHours();
+
+    let timeFactor = 1.0;
+    if (hour >= 15 && hour < 17) timeFactor = 0.3;
+    else if (hour >= 11 && hour <= 13 || hour >= 18 && hour <= 19) timeFactor = 1.8;
+
+    const busyFactorMap = [0.8, 1.2, 2.2];
+    const busyFactor = busyFactorMap[(shop.busyLevel || 2) - 1];
+
+    return Math.ceil(avg * busyFactor * timeFactor);
+  }
+
   rollFood() {
     if (this.isRolling) return;
+    this.lastWaitTimeRecord = this.showReroll ? this.predictedWaitTime : 999;
     this.isRolling = true;
-    this.buffText = ''; // 開始滾動時清空 Buff
+    this.showReroll = false;
+    this.resultCategory = '';
 
     let count = 0;
     let intervalId = setInterval(() => {
-      // 滾動期間：分類等機率跳動
-      this.resultText = this.categories[Math.floor(Math.random() * this.categories.length)];
+      let types = ['吃食堂', '點外賣', '出去吃', '吃泡面'];
+      this.resultText = types[Math.floor(Math.random() * types.length)];
       count++;
       if (count > 15) {
         clearInterval(intervalId);
@@ -80,145 +106,200 @@ struct Index {
   }
 
   finishRolling() {
-    // 1. 第一層：分類均等隨機 (每個大項 25% 幾率)
     let finalType = this.resultText;
-    let matchedShops = this.shops.filter(s => s.type === finalType);
 
-    let finalScore = 3; // 預設中間分
+    let weatherFactor = 1.0;
+    if (this.isRainy && finalType === '出去吃') weatherFactor = 0.2;
+    if (this.isRainy && (finalType === '點外賣' || finalType === '吃泡面')) weatherFactor = 2.0;
 
-    if (matchedShops.length > 0) {
-      // 2. 第二層：按 5:4:3:2:1 權重篩選店鋪
+    let availableShops = this.shops.filter(s => {
+      let isTypeMatch = s.type === finalType;
+      let isBudgetMatch = this.isBudgetExpanded ? s.avgCost <= this.currentBudget : true;
+      return isTypeMatch && isBudgetMatch;
+    });
+
+    if (availableShops.length > 0) {
       let weightPool: Shop[] = [];
-      matchedShops.forEach(shop => {
-        for (let i = 0; i < shop.score; i++) {
-          weightPool.push(shop);
+      availableShops.forEach(shop => {
+        let finalWeight = 1;
+        let waitTime = this.predictWaitTime(shop);
+
+        switch (this.currentPreference) {
+          case 0: finalWeight = Math.max(1, (shop.score || 3) - ((shop.busyLevel || 2) - 1)); break;
+          case 1: finalWeight = Math.max(1, 10 - Math.floor(shop.avgCost / 10)); break;
+          case 2: finalWeight = waitTime < 10 ? 10 : Math.max(1, 4 - Math.floor(waitTime / 5)); break;
+          case 3: finalWeight = (shop.score || 3) >= 4 ? shop.score * 3 : 1; break;
         }
+
+        let finalCount = Math.ceil(finalWeight * weatherFactor);
+        for (let i = 0; i < finalCount; i++) { weightPool.push(shop); }
       });
 
-      let pickedShop = weightPool[Math.floor(Math.random() * weightPool.length)];
+      let pickedShop = weightPool.length > 0 ? weightPool[Math.floor(Math.random() * weightPool.length)] : availableShops[0];
       this.resultText = pickedShop.name;
-      this.resultSubText = `【${finalType}】 評價等級：${pickedShop.level}`;
-      finalScore = pickedShop.score;
-    } else {
-      this.resultSubText = "該分類暫無記錄，直接去吧！";
-    }
+      this.resultCategory = `🏷️ ${finalType}`;
+      this.resultSubText = `預估人均：￥${pickedShop.avgCost} | 評價：${pickedShop.level}`;
 
-    // 3. 第三層：觸發補償性 Buff
-    this.generateBuff(finalScore);
+      let newWaitTime = this.predictWaitTime(pickedShop);
+      this.predictedWaitTime = this.lastWaitTimeRecord < 999 ? Math.min(newWaitTime, this.lastWaitTimeRecord) : newWaitTime;
+      if (this.predictedWaitTime > 25) this.showReroll = true;
+    } else {
+      this.resultSubText = `當前條件下無 [${finalType}] 記錄`;
+    }
 
     this.isRolling = false;
+    animateTo({ curve: curves.springMotion() }, () => { this.textScale = 1.2; });
+    setTimeout(() => { animateTo({ curve: curves.springMotion() }, () => { this.textScale = 1.0; }); }, 500);
   }
 
-  // 補償機制：好店省錢，差店加餐
-  generateBuff(score: number) {
-    if (Math.random() > 0.3) { // 70% 的幾率出現建議
-      if (score >= 4) {
-        // 夯/頂級 -> 省錢
-        let idx = Math.floor(Math.random() * this.saveBuffs.length);
-        this.buffText = "✨ 好店省錢建議： " + this.saveBuffs[idx];
-      } else if (score <= 2) {
-        // NPC/拉完了 -> 補償
-        let idx = Math.floor(Math.random() * this.treatBuffs.length);
-        this.buffText = "✨ 避雷補償 Buff： " + this.treatBuffs[idx];
-      } else {
-        this.buffText = "✨ 今日Buff： 正常發揮，不加不減";
+  parseBatchInput() {
+    if (this.batchInputText.trim() === '') return;
+    let lines = this.batchInputText.split('\n');
+    let addedCount = 0;
+    lines.forEach(line => {
+      let parts = line.split(/[ ,，-]+/);
+      if (parts.length >= 2) {
+        let name = parts[0];
+        let type = parts[1];
+        let cost = parts.length >= 3 ? Number(parts[2]) : 20;
+        const newShop: Shop = {
+          name: name, type: type, level: '人上人', score: 3,
+          busyLevel: 2, avgCost: isNaN(cost) ? 20 : cost, history: [15]
+        };
+        this.shops.push(newShop);
+        addedCount++;
       }
-    } else {
-      this.buffText = "✨ 今日Buff： 隨緣吃，不糾結";
-    }
+    });
+    this.syncDataToStorage();
+    this.batchInputText = '';
+    promptAction.showToast({ message: `成功導入 ${addedCount} 家店鋪` });
   }
 
-  // --- 管理功能：增刪改 ---
-  saveShop() {
-    if (this.inputName.trim() === '') {
-      promptAction.showToast({ message: '請輸入店名' });
-      return;
-    }
-    const newShop: Shop = {
-      name: this.inputName,
-      type: this.inputType,
-      level: this.levels[this.selectedLevelIndex],
-      score: this.selectedLevelIndex + 1
-    };
-    if (this.editingIndex === -1) {
-      this.shops.push(newShop);
-      promptAction.showToast({ message: '已收錄' });
-    } else {
-      this.shops[this.editingIndex] = newShop;
-      this.editingIndex = -1;
-      promptAction.showToast({ message: '修改成功' });
-    }
-    this.inputName = '';
+  @Builder SheetBuilder() {
+    Tabs() {
+      TabContent() {
+        Column({ space: 15 }) {
+          Text('智能批量導入').fontSize(18).fontWeight(FontWeight.Bold).width('100%')
+          TextArea({ placeholder: '格式示例：\n松濤園 吃食堂 15\n麥當勞 出去吃 35', text: this.batchInputText })
+            .onChange(v => this.batchInputText = v).height(150).backgroundColor('#F5F7FA')
+          Button('解析並存入飯單').width('100%').height(45).backgroundColor('#1A1A1A')
+            .onClick(() => this.parseBatchInput())
+          Text('支持多行粘貼，自動識別空格或逗號分隔符').fontSize(12).fontColor('#999').width('100%')
+        }.padding(25)
+      }.tabBar('批量導入')
+
+      TabContent() {
+        Column({ space: 15 }) {
+          Text(this.editingIndex === -1 ? '手動錄入' : '重新評價').fontSize(18).fontWeight(FontWeight.Bold)
+          TextInput({ placeholder: '店鋪名稱', text: this.inputName }).onChange(v => this.inputName = v)
+          Row({ space: 10 }) {
+            TextInput({ placeholder: '人均消費', text: this.inputCost }).type(InputType.Number).layoutWeight(1).onChange(v => this.inputCost = v)
+            Select([{ value: '吃食堂' }, { value: '點外賣' }, { value: '出去吃' }, { value: '吃泡面' }])
+              .value(this.inputType).onSelect((i, v) => this.inputType = v).layoutWeight(1)
+          }
+          Button('保存修改').width('100%').height(45).backgroundColor('#1A1A1A')
+            .onClick(() => {
+              if (!this.inputName) return;
+              const newShop: Shop = {
+                name: this.inputName, type: this.inputType, level: this.levels[this.selectedLevelIndex],
+                score: this.selectedLevelIndex + 1, busyLevel: this.inputBusyLevel,
+                avgCost: Number(this.inputCost), history: [15]
+              };
+              if (this.editingIndex === -1) this.shops.push(newShop);
+              else this.shops[this.editingIndex] = newShop;
+              this.syncDataToStorage();
+              this.isShowSheet = false;
+            })
+        }.padding(25)
+      }.tabBar('手動錄入')
+    }.backgroundColor(Color.White).borderRadius({ topLeft: 20, topRight: 20 })
   }
 
-  deleteShop(index: number) {
-    this.shops.splice(index, 1);
-    promptAction.showToast({ message: '已刪除' });
-  }
-
-  startEdit(index: number) {
-    this.editingIndex = index;
-    const shop = this.shops[index];
-    this.inputName = shop.name;
-    this.inputType = shop.type;
-    this.selectedLevelIndex = this.levels.indexOf(shop.level);
-  }
-
-  getLevelColor(level: string) {
-    const colorMap: Record<string, string> = {
-      '夯': '#D32F2F', '頂級': '#F57C00', '人上人': '#388E3C', 'NPC': '#757575', '拉完了': '#212121'
-    };
-    return colorMap[level] || '#666666';
+  @Builder DeleteButton(index: number) {
+    Button('刪除').backgroundColor('#D32F2F').fontColor(Color.White).width(80).height('100%')
+      .onClick(() => { this.shops.splice(index, 1); this.syncDataToStorage(); })
   }
 
   build() {
     Column() {
-      // --- 頂部展示區 ---
-      Column({ space: 15 }) {
-        Text(this.resultText).fontSize(32).fontWeight(FontWeight.Bold).fontColor('#E64A19').textAlign(TextAlign.Center)
-        Text(this.resultSubText).fontSize(16).fontColor('#666666')
+      Column({ space: 12 }) {
+        Text(this.resultText).fontSize(34).fontWeight(FontWeight.Bolder).scale({ x: this.textScale, y: this.textScale })
 
-        if (this.buffText !== '') {
-          Text(this.buffText).fontSize(18).fontWeight(FontWeight.Medium).fontColor('#007DFF')
-            .padding(12).backgroundColor('#E3F2FD').borderRadius(12)
+        if (this.resultCategory !== '') {
+          Text(this.resultCategory).fontSize(12).fontColor('#007DFF').backgroundColor('rgba(0, 125, 255, 0.1)')
+            .padding({ left: 10, right: 10, top: 4, bottom: 4 }).borderRadius(8)
         }
 
-        Button(this.isRolling ? '算法計算中...' : '幫我決定')
-          .width('60%').height(45).onClick(() => this.rollFood())
-      }
-      .padding(30).width('100%').backgroundColor('#FFFFFF')
-      .borderRadius({ bottomLeft: 25, bottomRight: 25 }).shadow({ radius: 8, color: '#15000000' })
+        Text(this.resultSubText).fontSize(14).fontColor('#666')
 
-      // --- 輸入與編輯區 ---
-      Column({ space: 10 }) {
-        Text(this.editingIndex === -1 ? '美食審判台' : '重新評價中...').fontSize(18).fontWeight(FontWeight.Bold).width('100%')
-        TextInput({ placeholder: '輸入店名或食物', text: this.inputName }).onChange((v) => this.inputName = v)
+        // 💡 這裡修復了 Toggle 的寫法
+        Row({ space: 15 }) {
+          Text('當前天氣：').fontSize(14).fontColor('#333')
+          Toggle({ type: ToggleType.Button, isOn: this.isRainy }) {
+            Text(this.isRainy ? '正在下雨' : '天氣晴朗')
+              .fontSize(12)
+              .fontColor(this.isRainy ? Color.White : '#333')
+              .padding(8)
+          }
+          .selectedColor('#1A1A1A')
+          .onChange(v => this.isRainy = v)
+        }.margin({ top: 5 })
+
         Row({ space: 8 }) {
-          Select([{ value: '吃食堂' }, { value: '點外賣' }, { value: '出去吃' }, { value: '吃泡面' }]).value(this.inputType).onSelect((i, v) => this.inputType = v)
-          Select([{ value: '拉完了' }, { value: 'NPC' }, { value: '人上人' }, { value: '頂級' }, { value: '夯' }]).value(this.levels[this.selectedLevelIndex]).onSelect((index) => this.selectedLevelIndex = index)
-        }.width('100%').justifyContent(FlexAlign.SpaceBetween)
-        Button(this.editingIndex === -1 ? '納入飯單' : '確認修改').width('100%').height(40).onClick(() => this.saveShop())
-      }.padding(20).margin({ top: 10 })
+          ForEach(['綜合', '省錢', '效率', '美味'], (label: string, index: number) => {
+            Button(label).layoutWeight(1).height(35).fontSize(12)
+              .backgroundColor(this.currentPreference === index ? '#1A1A1A' : 'rgba(0,0,0,0.06)')
+              .fontColor(this.currentPreference === index ? Color.White : '#333')
+              .onClick(() => this.currentPreference = index)
+          })
+        }.width('100%').padding({ left: 10, right: 10 })
 
-      // --- 底部列表區 ---
-      Text('江湖飯單').fontSize(16).margin({ top: 10, left: 20 }).width('100%')
+        Column({ space: 5 }) {
+          Text(this.isBudgetExpanded ? '收起預算設置 ▲' : '展開預算設置 ▼')
+            .fontSize(12).fontColor('#666').onClick(() => { animateTo({ duration: 300, curve: Curve.EaseInOut }, () => { this.isBudgetExpanded = !this.isBudgetExpanded; }); })
+
+          if (this.isBudgetExpanded) {
+            Row() {
+              Text('預算上限：').fontSize(14)
+              Text(`￥${this.currentBudget}`).fontSize(18).fontWeight(FontWeight.Bold).fontColor('#E64A19')
+            }.margin({ top: 10 })
+            Slider({ value: this.currentBudget, min: 10, max: 200, step: 5 }).onChange(v => this.currentBudget = v).width('85%').selectedColor('#E64A19')
+          }
+        }.padding(10).backgroundColor('rgba(255,255,255,0.4)').borderRadius(15)
+
+        if (this.predictedWaitTime > 0) {
+          Text(`預計排隊：${this.predictedWaitTime} 分鐘`).fontColor(this.predictedWaitTime > 25 ? '#D32F2F' : '#388E3C').fontWeight(FontWeight.Bold)
+          if (this.showReroll) Button('重新選擇').height(30).backgroundColor('#D32F2F').onClick(() => this.rollFood())
+        }
+
+        Button(this.isRolling ? '算法計算中...' : '開始決定').width('75%').height(50).backgroundColor('#1A1A1A').onClick(() => this.rollFood())
+      }
+      .padding({ top: 50, bottom: 25, left: 15, right: 15 }).width('100%')
+      .backgroundColor('rgba(255, 255, 255, 0.4)').backgroundBlurStyle(BlurStyle.Thin).borderRadius({ bottomLeft: 40, bottomRight: 40 })
+
+      Row() {
+        Text(`江湖飯單 (${this.shops.length})`).fontWeight(FontWeight.Bold).layoutWeight(1)
+        Button('添加/導入').height(30).fontSize(12).backgroundColor('#007DFF').onClick(() => { this.editingIndex = -1; this.isShowSheet = true; })
+      }.width('100%').padding(20)
+
       List({ space: 10 }) {
         ForEach(this.shops, (item: Shop, index: number) => {
           ListItem() {
             Row() {
               Column() {
-                Text(item.name).fontSize(16).fontWeight(FontWeight.Bold)
-                Text(item.type).fontSize(12).fontColor('#999999').margin({ top: 4 })
+                Text(item.name).fontWeight(FontWeight.Bold)
+                Text(`人均 ￥${item.avgCost}`).fontSize(12).fontColor('#666')
               }.alignItems(HorizontalAlign.Start).layoutWeight(1)
-              Row({ space: 15 }) {
-                Text(item.level).fontColor('#FFFFFF').fontSize(12).fontWeight(FontWeight.Bold).backgroundColor(this.getLevelColor(item.level)).padding({ left: 8, right: 8, top: 4, bottom: 4 }).borderRadius(10)
-                Text('改').fontSize(14).fontColor('#007DFF').onClick(() => this.startEdit(index))
-                Text('刪').fontSize(14).fontColor('#D32F2F').onClick(() => this.deleteShop(index))
-              }
-            }.width('100%').padding(15).backgroundColor('#FFFFFF').borderRadius(12)
-          }
+              Text(item.level).fontSize(11).fontColor(Color.White).backgroundColor('#1A1A1A').padding({ left: 6, right: 6, top: 2, bottom: 2 }).borderRadius(5)
+            }
+            .width('100%').padding(15).backgroundColor(Color.White).borderRadius(12)
+            .onClick(() => { this.editingIndex = index; this.isShowSheet = true; })
+          }.swipeAction({ end: this.DeleteButton(index) })
         })
-      }.layoutWeight(1).padding({ left: 20, right: 20, bottom: 20 }).width('100%')
-    }.width('100%').height('100%').backgroundColor('#F5F7FA')
+      }.padding({ left: 20, right: 20, bottom: 10 }).layoutWeight(1)
+    }
+    .width('100%').height('100%')
+    .linearGradient({ direction: GradientDirection.RightBottom, colors: [['#E0EAFC', 0], ['#CFDEF3', 1]] })
+    .bindSheet($$this.isShowSheet, this.SheetBuilder(), { height: SheetSize.MEDIUM })
   }
 }
